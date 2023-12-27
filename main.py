@@ -1,9 +1,14 @@
 #from flask import Flask, render_template
 import socket
 from struct import unpack
+import threading
+import sys
 
-MSGLEN_BYTE = 24        # int (64) + float (64) + float (64) = 8 + 8 + 8 = 24 byte
+MSGLEN_BYTE = 12        # int (64) + float (64) + float (64) = 8 + 8 + 8 = 24 byte
 SERVERPORT = 2500
+
+DISCONNECT_MESSAGE = "!DISCONNECT!"
+FORMAT             = 'utf-8'
 
 # app = Flask(__name__)
 
@@ -31,6 +36,7 @@ def ReceiveData(sock: socket.socket) -> bytes:
             raise RuntimeError("socket connection broken")
         chunks.append(chunk)
         bytesReceived = bytesReceived + len(chunk)
+    print("Received " + str(bytesReceived) + " bytes")
     return b''.join(chunks)
 
 
@@ -39,9 +45,42 @@ def ParseData(bytes: bytes) -> (int, float, float):
     return timestamp, temp, hum
 
 
-print("Raspberry Pi Server init")
-serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-serverSocket((socket.gethostname(), SERVERPORT))
-serverSocket.listen()
-print("Init done")
+def ClientHandle(clientConnection: socket.socket, clientAddress):
+    print(f"\n[THREAD][NEW CONNECTION] {clientAddress} connected.")
 
+    connected = True
+
+    while connected:
+        bytes = ReceiveData(clientConnection)
+        print(f"\n[THREAD][DATA] {bytes} - {bytes.decode(FORMAT)} - {bytes.decode(FORMAT) == DISCONNECT_MESSAGE} - {DISCONNECT_MESSAGE}")
+        if bytes.decode(FORMAT) == DISCONNECT_MESSAGE:
+            print("Disconnect message received")
+            connected = False
+        else:
+            tim, t, h = ParseData(bytes)
+            # TODO gestione della memorizzazione dei dati
+            print(f"[{tim}] - Temperature = {t}, Humidity = {h}")
+
+    print("\nClosing the connection")
+    clientConnection.close()
+
+
+print("[MAIN]Raspberry Pi Server init")
+serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+serverSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+ipAddr = socket.gethostname()
+ipAddr = "192.168.178.32"   # FIXME test ip
+serverSocket.bind((ipAddr, SERVERPORT))
+serverSocket.listen()
+print(f"[MAIN]Listening on {ipAddr}:{SERVERPORT}")
+
+while (True):
+    try:
+        clientConnection, clientAddress = serverSocket.accept()
+        thread = threading.Thread(target=ClientHandle, args=(clientConnection, clientAddress))
+        thread.start()
+        print(f"\n[MAIN][ACTIVE CONNECTIONS] {threading.active_count() - 1}")
+    except KeyboardInterrupt:
+        serverSocket.close()
+        print("\nKeyboard Interrupt received. Closing socket and halting the applcation")
+        sys.exit(0)
